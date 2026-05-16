@@ -7,7 +7,7 @@ sentence-transformers
 faiss-cpu
 pypdf
 pymupdf
-pinecone-client
+pinecone
 langchain-pinecone
 langchain-groq
 yt-dlp
