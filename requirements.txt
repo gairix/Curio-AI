@@ -1,0 +1,16 @@
+streamlit
+python-dotenv
+langchain
+langchain-community
+langchain-huggingface
+sentence-transformers
+faiss-cpu
+pypdf
+pymupdf
+pinecone-client
+langchain-pinecone
+langchain-groq
+yt-dlp
+faster-whisper
+rank-bm25
+pydantic
