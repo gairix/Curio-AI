@@ -589,6 +589,13 @@ def ingest_pdf(pdf_path, document_id):
 
 def download_audio(youtube_url, output_folder="downloads"):
     os.makedirs(output_folder, exist_ok=True)
+
+    # 🚀 STEP 1: Dynamically write the cookies file from Streamlit secrets at runtime
+    cookie_path = "downloads/youtube_cookies.txt"
+    if "YOUTUBE_COOKIES" in st.secrets:
+        with open(cookie_path, "w", encoding="utf-8") as f:
+            f.write(st.secrets["YOUTUBE_COOKIES"])
+            
     ydl_opts = {
         'format': 'bestaudio/best',
         'outtmpl': f'{output_folder}/%(id)s_%(title)s.%(ext)s',
