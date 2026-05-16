@@ -10,7 +10,7 @@ pymupdf
 pinecone
 langchain-pinecone
 langchain-groq
-yt-dlp
+yt-dlp>=2026.01.01
 faster-whisper
 rank-bm25
 pydantic
