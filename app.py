@@ -668,6 +668,7 @@ class RAGResponse(BaseModel):
 
 parser = PydanticOutputParser(pydantic_object=RAGResponse)
 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, groq_api_key=groq_api_key)
+#parser = OutputFixingParser.from_llm(parser=base_parser, llm=llm)
 
 def format_docs(docs):
     formatted = ""
@@ -680,6 +681,11 @@ pdf_prompt = ChatPromptTemplate.from_template("""
 You are an expert educational AI learning assistant helping users learn from complex PDFs.
 
 Analyze the provided context carefully and answer the user's question with deep conceptual clarity, structural elegance, and professional formatting.
+
+CRITICAL PARSING RULE:
+- You MUST respond ONLY with a valid JSON object matching the requested schema. 
+- Do NOT include any introduction conversational text, headers (like ###), bullet points, or markdown text outside of the JSON block itself.
+- Your entire response text must wrap directly into the raw JSON properties required below.                                 
 
 IMPORTANT RESPONSE RULES:
 - Use clean Markdown layout elements: Utilize clear headers (###), bold key phrases, and break explanations down into bullet points or numbered lists. No walls of prose.
@@ -704,12 +710,17 @@ You are an expert AI assistant helping users master knowledge from audio lecture
 
 Analyze the provided transcript carefully and answer the user's question with high structural organization and professional formatting.
 
+CRITICAL PARSING RULE:
+- You MUST respond ONLY with a valid JSON object matching the requested schema. 
+- Do NOT include any introduction conversational text, headers (like ###), bullet points, or markdown text outside of the JSON block itself.
+- Your entire response text must wrap directly into the raw JSON properties required below.                                                 
+
 IMPORTANT RESPONSE RULES:
 - Use clean Markdown layout elements: Utilize clear headers (###), bold key phrases, and break explanations down into bullet points or numbered lists. No walls of prose.
 - Synthesize ideas fluidly across timestamps to create an insightful, clear, and comprehensive answer.
 - Rely ONLY on the provided context. Do not hallucinate outside details.
 - If the context completely lacks any relevant information, state exactly: "I could not find enough matching information in the lecture to answer that safely."
-
+                                                  
 CONTEXT:
 {context}
 
@@ -1017,36 +1028,23 @@ with st.sidebar:
         st.rerun()
 
 
-# CHAT HISTORY
-
+# CHAT HISTORY (FIXED & CLEAN)
 
 for msg in st.session_state.messages:
-
     avatar = "👨‍🎓" if msg["role"] == "user" else "🤖"
-
     with st.chat_message(msg["role"], avatar=avatar):
-
-        st.markdown(msg["content"])
+        if msg["role"] == "user":
+            st.markdown(msg["content"])
+        else:
+            # Wrap historical assistant responses inside the same clean native container
+            with st.container(border=True):
+                st.markdown(msg["content"])
 
         if "references" in msg and msg["references"]:
-
             st.markdown("---")
-
             st.caption("📂 Verified Sources")
-
             for ref in msg["references"]:
-
-                st.markdown(f"""
-                <div style="
-                    background: rgba(255,255,255,0.03);
-                    border: 1px solid rgba(255,255,255,0.05);
-                    border-radius: 12px;
-                    padding: 0.8rem;
-                    margin-bottom: 0.5rem;
-                ">
-                {ref}
-                </div>
-                """, unsafe_allow_html=True)
+                st.markdown(ref)
 
 
 # CHAT INPUT
@@ -1155,74 +1153,38 @@ if user_query:
 
                     else:
 
-                        match = re.search(r"\d+(?:\.\d+)?", m.get("timestamp", ""))
+                        # 1. Safely extract the first digits for start_seconds
+                        raw_timestamp = str(m.get("timestamp", "0"))
+                        match = re.search(r"\d+(?:\.\d+)?", raw_timestamp)
                         if match:
                             start_seconds = int(float(match.group()))
                         else:
                             start_seconds = 0
 
                         video_id = m.get('video_id', '')
+                        clickable_url = f"https://www.youtube.com/watch?v={video_id}&t={start_seconds}s"
 
-                        clickable_url = (
-                            f"https://www.youtube.com/watch?"
-                            f"v={video_id}&t={start_seconds}s"
-                        )
-
-                        clean_ref = (
-                            f"🎥 "
-                            f"[{m['source_name']} "
-                            f"({m['timestamp']})]"
-                            f"({clickable_url})"
-                        )
+                        # 2. Native markdown link syntax instead of an HTML anchor
+                        clean_ref = f"🎥 {m['source_name']} [({m['timestamp']})]({clickable_url})"
 
                     if clean_ref not in refs:
                         refs.append(clean_ref)
 
-                # BEAUTIFUL RESPONSE CARD
-               
+                # BEAUTIFUL RESPONSE CARD (FIXED & CLEAN)
+                
+                # 1. Open a native Streamlit container with a sleek border frame
+                with st.container(border=True):
+                    # 2. Render the answer text inside it safely (Markdown will now compile perfectly!)
+                    st.markdown(answer_text)
 
-                st.markdown(f"""
-                <div style="
-                    background:
-                        linear-gradient(
-                            135deg,
-                            rgba(99,102,241,0.08),
-                            rgba(139,92,246,0.04)
-                        );
-
-                    border: 1px solid rgba(255,255,255,0.06);
-
-                    border-radius: 24px;
-
-                    padding: 1.6rem;
-
-                    line-height: 1.9;
-
-                    font-size: 1rem;
-
-                    margin-top: 0.8rem;
-
-                    box-shadow:
-                        0px 6px 28px rgba(0,0,0,0.28);
-
-                    backdrop-filter: blur(14px);
-                ">
-                {answer_text}
-                </div>
-                """, unsafe_allow_html=True)
-
+              
                 # REFERENCES
                 
-
                 if refs:
-
                     st.markdown("---")
-
                     st.caption(
                         "📂 Verified Sources "
-                        "(Click timestamps to open YouTube)"
                     )
-
                     for ref in refs:
                         st.markdown(ref)
 
