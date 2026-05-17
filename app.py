@@ -1,5 +1,6 @@
 import os
 import re
+import base64
 from datetime import datetime
 import streamlit as st
 import yt_dlp
@@ -12,6 +13,7 @@ from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.runnables import RunnableBranch
+from langchain_core.messages import HumanMessage
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyMuPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -524,12 +526,16 @@ if "active_docs" not in st.session_state:
     st.session_state.active_docs = []
 if "store" not in st.session_state:
     st.session_state.store = {}
+if "active_image" not in st.session_state:
+    st.session_state.active_image = None
     
-# 🚀 NEW: State counters to force-reset widget states instantly
+# State counters to force-reset widget states instantly
 if "pdf_uploader_key" not in st.session_state:
     st.session_state.pdf_uploader_key = 0
 if "yt_input_key" not in st.session_state:
     st.session_state.yt_input_key = 0
+if "image_uploader_key" not in st.session_state:
+    st.session_state.image_uploader_key = 0
 
 
 # CONFIGURATION & ENVIRONMENT SETUP
@@ -577,7 +583,6 @@ def ingest_pdf(pdf_path, document_id):
             metadata={
                 "document_id": document_id,
                 "source_type": "pdf",
-                # 🚀 ENSURE THIS IS EXACTLY MATCHING:
                 "source_name": os.path.basename(pdf_path), 
                 "page": chunk.metadata.get("page", -1),
                 "timestamp": "",
@@ -590,7 +595,6 @@ def ingest_pdf(pdf_path, document_id):
 def download_audio(youtube_url, output_folder="downloads"):
     os.makedirs(output_folder, exist_ok=True)
 
-    # 🚀 STEP 1: Dynamically write the cookies file from Streamlit secrets at runtime
     cookie_path = "downloads/youtube_cookies.txt"
     if "YOUTUBE_COOKIES" in st.secrets:
         with open(cookie_path, "w", encoding="utf-8") as f:
@@ -641,6 +645,11 @@ def ingest_youtube(timestamped_chunks, video_metadata, document_id):
     return documents
 
 
+# HELPER FOR VISION TRANSFORMATION
+def encode_bytes_to_base64(image_bytes):
+    return base64.b64encode(image_bytes).decode("utf-8")
+
+
 # STEP 6 — VECTOR ENGINE SETUP
 
 def build_vectorstore():
@@ -661,7 +670,7 @@ def build_vectorstore():
     if index_name not in existing_indexes:
         pc.create_index(
             name=index_name,
-            dimension=384,  # Fits your sentence-transformers active index setting natively
+            dimension=384,
             metric="cosine",
             spec=ServerlessSpec(cloud="aws", region="us-east-1")
         )
@@ -675,7 +684,7 @@ class RAGResponse(BaseModel):
 
 parser = PydanticOutputParser(pydantic_object=RAGResponse)
 llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, groq_api_key=groq_api_key)
-#parser = OutputFixingParser.from_llm(parser=base_parser, llm=llm)
+vision_llm = ChatGroq(model="meta-llama/llama-4-scout-17b-16e-instruct", temperature=0, groq_api_key=groq_api_key)
 
 def format_docs(docs):
     formatted = ""
@@ -776,11 +785,7 @@ def execute_hybrid_retrieval(question, vectorstore, document_id):
     bm25_retriever = BM25Retriever.from_documents(st.session_state.active_docs)
     bm25_retriever.k = 6
     
-    # 🚀 NEW: Dynamic Context Separation Filtering
-    # If dealing with multiple PDFs, force an $in metadata filter match on source_name
-    # 🚀 ENHANCED: Check if document_id is a list (works for both multiple PDFs and multiple YouTube videos)
     if isinstance(document_id, list):
-        # If it's a list, look inside 'source_name' for PDFs or 'video_id' for YouTube
         search_filter = {
             "$or": [
                 {"source_name": {"$in": document_id}},
@@ -796,7 +801,7 @@ def execute_hybrid_retrieval(question, vectorstore, document_id):
             "k": 6, 
             "fetch_k": 15, 
             "lambda_mult": 0.5,
-            "filter": search_filter # 🚀 Injecting the targeted filter block
+            "filter": search_filter
         }
     )
     
@@ -817,7 +822,6 @@ def execute_hybrid_retrieval(question, vectorstore, document_id):
     return [doc for doc, score in reranked[:4]]
 
 
-
 # HERO HEADER
 
 
@@ -829,7 +833,7 @@ st.markdown("""
 </div>
 
 <div class="hero-subtitle">
-Advanced Multi-Source Retrieval-Augmented Generation System for PDFs and YouTube Lectures
+Advanced Multi-Source Retrieval-Augmented Generation System for PDFs, YouTube Lectures, and Images
 </div>
 
 </div>
@@ -842,12 +846,10 @@ with st.sidebar:
 
     st.markdown("## ⚙️ Workspace")
 
-    tab1, tab2 = st.tabs(["📄 PDFs", "🎥 YouTube"])
+    tab1, tab2, tab3 = st.tabs(["📄 PDFs", "🎥 YouTube", "📸 Images"])
 
     # PDF TAB
-
     with tab1:
-
         uploaded_files = st.file_uploader(
             "Upload PDF Documents",
             type=["pdf"],
@@ -856,130 +858,93 @@ with st.sidebar:
         )
 
         if uploaded_files and st.button("🚀 Process PDFs"):
-
             progress = st.progress(0)
-
             with st.spinner("Processing PDF resources..."):
-
                 all_docs = []
-
                 os.makedirs("downloads", exist_ok=True)
-
                 progress.progress(10, text="Saving uploaded assets...")
 
                 for uploaded_file in uploaded_files:
-
                     local_path = os.path.join("downloads", uploaded_file.name)
-
                     with open(local_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
 
                     progress.progress(35, text=f"Analyzing {uploaded_file.name}...")
-
                     file_docs = ingest_pdf(local_path, uploaded_file.name)
-
                     all_docs.extend(file_docs)
 
                 progress.progress(65, text="Building vector index...")
-
                 st.session_state.active_docs = all_docs
-
-                st.session_state.document_id = [
-                    f.name for f in uploaded_files
-                ]
+                st.session_state.document_id = [f.name for f in uploaded_files]
+                st.session_state.active_image = None  # Reset complementary modes
 
                 vstore = build_vectorstore()
-
                 vstore.add_documents(
                     all_docs,
                     ids=[f"{i}_{datetime.now().timestamp()}" for i in range(len(all_docs))]
                 )
-
                 progress.progress(100, text="Completed!")
-
-                st.success(
-                    f"Successfully indexed {len(all_docs)} chunks across {len(uploaded_files)} PDFs!"
-                )
+                st.success(f"Successfully indexed {len(all_docs)} chunks across {len(uploaded_files)} PDFs!")
 
     # YOUTUBE TAB
-
     with tab2:
-
         video_urls_input = st.text_area(
             "Paste YouTube URLs (comma separated)",
             key=f"yt_input_{st.session_state.yt_input_key}"
         )
 
         if video_urls_input and st.button("🎙️ Process Lectures"):
-
             progress = st.progress(0)
-
             with st.spinner("Transcribing YouTube lectures..."):
-
-                urls = [
-                    url.strip()
-                    for url in video_urls_input.split(",")
-                    if url.strip()
-                ]
-
+                urls = [url.strip() for url in video_urls_input.split(",") if url.strip()]
                 all_yt_docs = []
-
                 video_ids_list = []
-
                 total = len(urls)
 
                 for idx, video_url in enumerate(urls):
-
                     try:
-
-                        progress.progress(
-                            int((idx / total) * 100),
-                            text=f"Processing Lecture {idx+1}/{total}"
-                        )
-
+                        progress.progress(int((idx / total) * 100), text=f"Processing Lecture {idx+1}/{total}")
                         meta = download_audio(video_url)
-
                         video_ids_list.append(meta["video_id"])
-
-                        segments, _ = whisper_model.transcribe(
-                            meta["audio_path"]
-                        )
-
-                        ts_chunks = create_timestamped_chunks(
-                            list(segments),
-                            chunk_size=500
-                        )
-
-                        file_docs = ingest_youtube(
-                            ts_chunks,
-                            meta,
-                            meta["video_id"]
-                        )
-
+                        segments, _ = whisper_model.transcribe(meta["audio_path"])
+                        ts_chunks = create_timestamped_chunks(list(segments), chunk_size=500)
+                        file_docs = ingest_youtube(ts_chunks, meta, meta["video_id"])
                         all_yt_docs.extend(file_docs)
-
                     except Exception as e:
                         st.error(f"Failed processing: {video_url}")
                         st.exception(e)
 
                 if all_yt_docs:
-
                     st.session_state.active_docs = all_yt_docs
-
                     st.session_state.document_id = video_ids_list
+                    st.session_state.active_image = None  # Reset complementary modes
 
                     vstore = build_vectorstore()
-
                     vstore.add_documents(
                         all_yt_docs,
                         ids=[f"{i}_{datetime.now().timestamp()}" for i in range(len(all_yt_docs))]
                     )
-
                     progress.progress(100, text="Completed!")
+                    st.success(f"Indexed {len(all_yt_docs)} timeline chunks across {len(urls)} lectures!")
 
-                    st.success(
-                        f"Indexed {len(all_yt_docs)} timeline chunks across {len(urls)} lectures!"
-                    )
+    # 📸 IMAGE TAB
+    with tab3:
+        uploaded_image = st.file_uploader(
+            "Upload Image Asset",
+            type=["png", "jpg", "jpeg"],
+            key=f"image_uploader_{st.session_state.image_uploader_key}"
+        )
+
+        if uploaded_image and st.button("👁️ Process Image"):
+            with st.spinner("Analyzing image asset structures..."):
+                # Load image byte arrays into session state parameters natively
+                st.session_state.active_image = uploaded_image.getvalue()
+                st.session_state.document_id = [uploaded_image.name]
+                st.session_state.active_docs = [] # Wipes vector memory tracking metrics
+                
+                # Render preview safely inside sidebar workspace container using modern width flag
+                st.image(st.session_state.active_image, caption="Active Image Preview", width=280)
+                st.success(f"Successfully mounted '{uploaded_image.name}' as visual knowledge base resource!")
 
     
     # ACTIVE SOURCES
@@ -990,10 +955,8 @@ with st.sidebar:
     st.markdown("## 📚 Active Knowledge Base")
 
     if st.session_state.document_id:
-
         for doc in st.session_state.document_id:
             st.success(doc)
-
     else:
         st.info("No active resources loaded.")
 
@@ -1005,33 +968,24 @@ with st.sidebar:
     st.markdown("## 🧹 Session Controls")
 
     if st.button("💬 Clear Chat History"):
-
         st.session_state.messages = []
-
         if "user_1" in st.session_state.store:
             del st.session_state.store["user_1"]
-
         st.success("Chat history cleared!")
-
         st.rerun()
 
     if st.button("🗑️ Reset Entire Workspace"):
-
         st.session_state.messages = []
-
         st.session_state.document_id = None
-
         st.session_state.active_docs = []
-
+        st.session_state.active_image = None
         if "user_1" in st.session_state.store:
             del st.session_state.store["user_1"]
 
         st.session_state.pdf_uploader_key += 1
-
         st.session_state.yt_input_key += 1
-
+        st.session_state.image_uploader_key += 1
         st.success("Workspace reset complete!")
-
         st.rerun()
 
 
@@ -1043,7 +997,6 @@ for msg in st.session_state.messages:
         if msg["role"] == "user":
             st.markdown(msg["content"])
         else:
-            # Wrap historical assistant responses inside the same clean native container
             with st.container(border=True):
                 st.markdown(msg["content"])
 
@@ -1064,17 +1017,9 @@ user_query = st.chat_input(
 if user_query:
 
     if not st.session_state.document_id:
-
-        st.error(
-            "⚠️ Please upload and process resources before asking questions."
-        )
-
+        st.error("⚠️ Please upload and process resources before asking questions.")
     else:
-
-   
         # USER MESSAGE
-  
-
         with st.chat_message("user", avatar="👨‍🎓"):
             st.markdown(user_query)
 
@@ -1084,120 +1029,108 @@ if user_query:
         })
 
         # ASSISTANT RESPONSE
-        
-
         with st.chat_message("assistant", avatar="🤖"):
 
-            with st.status(
-                "🔍 Running Hybrid Retrieval Pipeline...",
-                expanded=False
-            ) as status:
-
-                st.write("🔄 Contextualizing conversational query...")
-
-                standalone = get_contextualized_question(user_query)
-
-                st.write("⚡ Executing BM25 + Dense Retrieval...")
-
-                vstore = build_vectorstore()
-
-                retrieved_docs = execute_hybrid_retrieval(
-                    standalone,
-                    vstore,
-                    st.session_state.document_id
-                )
-
-                st.write("📊 Applying Cross-Encoder Reranking...")
-
-                format_insts = parser.get_format_instructions()
-
-                chain_input = {
-                    "question": user_query,
-                    "docs": retrieved_docs,
-                    "history": "",
-                    "format_instructions": format_insts
-                }
-
-                status.update(
-                    label="✅ Retrieval Complete",
-                    state="complete",
-                    expanded=False
-                )
-
-            
-            # GENERATION
-            
-
-            with st.spinner("🧠 Synthesizing intelligent response..."):
-
-                response = conversational_rag.invoke(
-                    chain_input,
-                    config={
-                        "configurable": {
-                            "session_id": "user_1"
+            # -----------------------------------------------------------------
+            # BRANCH A: MULTIMODAL VISION PIPELINE (IMAGE LOADED)
+            # -----------------------------------------------------------------
+            if st.session_state.get("active_image") is not None:
+                with st.spinner("🧠 Analyzing image structure and synthesizing response..."):
+                    
+                    # Convert the raw byte string to base64 for message payload transmission
+                    base64_repr = encode_bytes_to_base64(st.session_state.active_image)
+                    
+                    # Force strict response constraints down prompt alongside layout guidelines
+                    system_guideline = (
+                        "You are an expert AI assistant specialized in analyzing visual diagrams, "
+                        "charts, and real-world photos. Answer the user's question with deep clarity, "
+                        "using headers (###), bold key phrases, and bullet points where structural organization helps. "
+                        "Rely strictly on visual patterns observed in the provided image layout details."
+                    )
+                    
+                    content_payload = [
+                        {"type": "text", "text": f"{system_guideline}\n\nUser Question: {user_query}"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:image/jpeg;base64,{base64_repr}"}
                         }
-                    }
-                )
+                    ]
+                    
+                    # Intercept processing from standard context chains to run visual reasoning
+                    vision_msg = HumanMessage(content=content_payload)
+                    raw_vision_response = vision_llm.invoke([vision_msg])
+                    
+                    answer_text = raw_vision_response.content
+                    refs = [f"📸 Visual Context: {st.session_state.document_id[0]}"]
 
-                answer_text = (
-                    response.answer
-                    if hasattr(response, 'answer')
-                    else str(response)
-                )
-
-                refs = []
-
-                for doc in retrieved_docs:
-
-                    m = doc.metadata
-
-                    if m['source_type'] == 'pdf':
-
-                        clean_ref = (
-                            f"📄 {m['source_name']} "
-                            f"(Page {int(m['page']) + 1})"
-                        )
-
-                    else:
-
-                        # 1. Safely extract the first digits for start_seconds
-                        raw_timestamp = str(m.get("timestamp", "0"))
-                        match = re.search(r"\d+(?:\.\d+)?", raw_timestamp)
-                        if match:
-                            start_seconds = int(float(match.group()))
-                        else:
-                            start_seconds = 0
-
-                        video_id = m.get('video_id', '')
-                        clickable_url = f"https://www.youtube.com/watch?v={video_id}&t={start_seconds}s"
-
-                        # 2. Native markdown link syntax instead of an HTML anchor
-                        clean_ref = f"🎥 {m['source_name']} [({m['timestamp']})]({clickable_url})"
-
-                    if clean_ref not in refs:
-                        refs.append(clean_ref)
-
-                # BEAUTIFUL RESPONSE CARD (FIXED & CLEAN)
-                
-                # 1. Open a native Streamlit container with a sleek border frame
+                # Render response card immediately
                 with st.container(border=True):
-                    # 2. Render the answer text inside it safely (Markdown will now compile perfectly!)
                     st.markdown(answer_text)
-
-              
-                # REFERENCES
-                
+                    
                 if refs:
                     st.markdown("---")
-                    st.caption(
-                        "📂 Verified Sources "
-                    )
+                    st.caption("📂 Verified Sources")
                     for ref in refs:
                         st.markdown(ref)
 
-        
-        # SAVE MESSAGE
+            # -----------------------------------------------------------------
+            # BRANCH B: HYBRID VECTOR RAG PIPELINE (PDF/YOUTUBE TEXT CORES)
+            # -----------------------------------------------------------------
+            else:
+                with st.status("🔍 Running Hybrid Retrieval Pipeline...", expanded=False) as status:
+                    st.write("🔄 Contextualizing conversational query...")
+                    standalone = get_contextualized_question(user_query)
 
+                    st.write("⚡ Executing BM25 + Dense Retrieval...")
+                    vstore = build_vectorstore()
+                    retrieved_docs = execute_hybrid_retrieval(standalone, vstore, st.session_state.document_id)
+
+                    st.write("📊 Applying Cross-Encoder Reranking...")
+                    format_insts = parser.get_format_instructions()
+
+                    chain_input = {
+                        "question": user_query,
+                        "docs": retrieved_docs,
+                        "history": "",
+                        "format_instructions": format_insts
+                    }
+
+                    status.update(label="✅ Retrieval Complete", state="complete", expanded=False)
+
+                with st.spinner("🧠 Synthesizing intelligent response..."):
+                    response = conversational_rag.invoke(
+                        chain_input,
+                        config={"configurable": {"session_id": "user_1"}}
+                    )
+
+                    answer_text = response.answer if hasattr(response, 'answer') else str(response)
+                    refs = []
+
+                    for doc in retrieved_docs:
+                        m = doc.metadata
+                        if m['source_type'] == 'pdf':
+                            clean_ref = f"📄 {m['source_name']} (Page {int(m['page']) + 1})"
+                        else:
+                            raw_timestamp = str(m.get("timestamp", "0"))
+                            match = re.search(r"\d+(?:\.\d+)?", raw_timestamp)
+                            start_seconds = int(float(match.group())) if match else 0
+                            video_id = m.get('video_id', '')
+                            clickable_url = f"https://www.youtube.com/watch?v={video_id}&t={start_seconds}s"
+                            clean_ref = f"🎥 {m['source_name']} [({m['timestamp']})]({clickable_url})"
+
+                        if clean_ref not in refs:
+                            refs.append(clean_ref)
+
+                    with st.container(border=True):
+                        st.markdown(answer_text)
+
+                    if refs:
+                        st.markdown("---")
+                        st.caption("📂 Verified Sources")
+                        for ref in refs:
+                            st.markdown(ref)
+
+        # SAVE HISTORICAL MESSAGE STATE
         st.session_state.messages.append({
             "role": "assistant",
             "content": answer_text,
