@@ -621,7 +621,7 @@ def ingest_youtube(video_url, doc_reference_id):
     creator_channel = metadata_payload.get("channel", {}).get("name", "Unknown Channel")
     
     # 2. Fetch Transcript Segments
-    transcript_config = {"api_key": serpapi_access_token, "engine": "youtube_video_transcript", "v": target_vid_id, "type": "asr", "language_code": "en"}
+    transcript_config = {"api_key": serpapi_access_token, "engine": "youtube_video_transcript", "v": target_vid_id, "type": "asr"}
     spoken_payload = requests.get("https://serpapi.com/search", params=transcript_config).json()
     
     if "error" in spoken_payload or not spoken_payload.get("transcript"):
