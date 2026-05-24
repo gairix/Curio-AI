@@ -34,8 +34,11 @@ COPY backend/ ./backend/
 # Copy compiled frontend from stage 1 to backend serving folder
 COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
+# Setup writable directory for media/file downloads (required for Hugging Face Spaces UID 1000 execution)
+RUN mkdir -p /app/backend/downloads && chmod -R 777 /app
+
 # Open the standard network port that uvicorn communicates through
-EXPOSE 8000
+EXPOSE 7860
 
 # Launch uvicorn
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "7860"]
