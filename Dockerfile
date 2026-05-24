@@ -1,7 +1,19 @@
-# Step 1: Use an official, lightweight Python blueprint base
+# --- Stage 1: Build React Frontend ---
+FROM node:20-slim AS frontend-builder
+WORKDIR /frontend
+
+# Copy npm configuration files and install dependencies
+COPY frontend/package*.json ./
+RUN npm ci
+
+# Copy React codebase and build the static bundle
+COPY frontend/ ./
+RUN npm run build
+
+# --- Stage 2: Setup FastAPI Backend ---
 FROM python:3.10-slim
 
-# Step 2: Install system-level binaries needed for audio processing and layout tools
+# Install system-level binaries needed for audio processing and layout tools
 RUN apt-get update && apt-get install -y \
     build-essential \
     curl \
@@ -9,21 +21,21 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Step 3: Establish the active working folder inside our container environment
 WORKDIR /app
 
-# Step 4: Copy over just the requirements list first (optimizes Docker build caching)
-COPY requirements.txt /app/
-
-# Step 5: Install all Python dependencies smoothly inside the box
+# Copy requirements and install python packages
+COPY requirements.txt ./
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# Step 6: Copy the rest of your local source code files into the container
-COPY . /app/
+# Copy FastAPI backend code
+COPY backend/ ./backend/
 
-# Step 7: Open the standard network port that Streamlit communicates through
-EXPOSE 8501
+# Copy compiled frontend from stage 1 to backend serving folder
+COPY --from=frontend-builder /frontend/dist ./frontend/dist
 
-# Step 8: Define the network commands to launch your application live
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+# Open the standard network port that uvicorn communicates through
+EXPOSE 8000
+
+# Launch uvicorn
+CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8000"]

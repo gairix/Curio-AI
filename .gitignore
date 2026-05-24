@@ -2,3 +2,6 @@ venv/
 .env
 downloads/
 __pycache__/
+youtube_cookies.txt
+old_code
+test_api.py
