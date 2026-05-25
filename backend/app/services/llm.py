@@ -66,6 +66,40 @@ contextualize_q_prompt = ChatPromptTemplate.from_template(
     "Standalone Question:"
 )
 
+classify_intent_prompt = ChatPromptTemplate.from_template(
+    "You are a routing agent for an educational AI assistant called Curio AI.\n"
+    "Your job is to classify if the user's latest query is a general inquiry/greeting/meta-question "
+    "or if it is a specific resource inquiry about the content of uploaded documents/images.\n\n"
+    "Classify the query into one of these two categories:\n"
+    "- 'GENERAL': For greetings (e.g., hello, hi), general capability questions (e.g., what can you do, "
+    "how can you help me, what is this app, who are you), or meta-questions that do not require extracting "
+    "information from the uploaded documents or images.\n"
+    "- 'RESOURCE_QUERY': For questions asking about the actual concepts, facts, or data inside the uploaded "
+    "text files, PDFs, videos, or image assets.\n\n"
+    "CRITICAL: Respond with ONLY one word, either 'GENERAL' or 'RESOURCE_QUERY'. Do not include any other text.\n\n"
+    "USER QUERY: {query}\n"
+    "CATEGORY:"
+)
+
+general_assistant_prompt = ChatPromptTemplate.from_template(
+    "You are Curio AI, an expert educational learning assistant.\n"
+    "The user has asked a general question about your capabilities, a greeting, or how to use this app. "
+    "Answer their question in a friendly, professional, and visually elegant manner using clean markdown layout elements: "
+    "Utilize clear headers (###), bold key phrases, and bullet points.\n\n"
+    "Highlight your main capabilities:\n"
+    "1. **Analyze PDFs and Documents**: Ask questions and get clear explanation summaries with references.\n"
+    "2. **Process YouTube Videos & Local Media**: Transcribe and query video and audio lectures/content.\n"
+    "3. **Analyze Images & Diagrams**: Support visual analysis and multimodal RAG on charts, diagrams, or math problems.\n"
+    "4. **Generate High-Density Study Summaries**: Produce comprehensive academic outlines of uploaded resources.\n"
+    "5. **Create Interactive Quizzes**: Generate multiple-choice questions to test comprehension.\n"
+    "6. **Compare Multiple Resources**: Create cross-comparison matrix tables to compare arguments and concepts.\n\n"
+    "Active Documents Loaded in this session: {active_docs}\n\n"
+    "If active documents are loaded, encourage the user to ask questions about them, generate a summary, or create a quiz!\n"
+    "Format the response beautifully as a direct response to the user's question.\n\n"
+    "USER QUESTION: {question}\n"
+    "RESPONSE:"
+)
+
 # LLM Chain Configurations
 pdf_chain = (
     {"context": lambda x: format_docs(x["docs"]), "question": lambda x: x["question"], "format_instructions": lambda _: parser.get_format_instructions(), "history": lambda x: x.get("history", "")}
@@ -107,6 +141,28 @@ async def get_contextualized_question(user_query: str, ws_session: WorkspaceSess
         return response.content
     except Exception:
         return user_query
+
+async def classify_query_intent(user_query: str) -> str:
+    """Classify if the user query is GENERAL or RESOURCE_QUERY."""
+    try:
+        prompt_val = classify_intent_prompt.format(query=user_query)
+        response = await llm.ainvoke(prompt_val)
+        result = response.content.strip().upper()
+        if "GENERAL" in result:
+            return "GENERAL"
+        return "RESOURCE_QUERY"
+    except Exception:
+        return "RESOURCE_QUERY"
+
+async def generate_general_response(user_query: str, active_docs_list: list) -> str:
+    """Generate a friendly general assistant response outlining features and active docs."""
+    try:
+        active_docs_str = ", ".join(active_docs_list) if active_docs_list else "No active resources loaded yet."
+        prompt_val = general_assistant_prompt.format(question=user_query, active_docs=active_docs_str)
+        response = await llm.ainvoke(prompt_val)
+        return response.content.strip()
+    except Exception as e:
+        return f"Hello! I am Curio AI. How can I help you today? (Error: {str(e)})"
 
 # RAG Executor
 async def run_conversational_rag(chain_input: dict, ws_session: WorkspaceSession, session_id="user_1"):

@@ -11,7 +11,9 @@ from backend.app.services.llm import (
     run_conversational_rag, 
     parser,
     get_session_history,
-    vision_llm
+    vision_llm,
+    classify_query_intent,
+    generate_general_response
 )
 
 router = APIRouter()
@@ -20,13 +22,26 @@ router = APIRouter()
 async def chat_interaction(query_data: ChatQuery):
     """Process a chat inquiry over active resources (text or multimodal image visual RAG)."""
     ws = get_session(query_data.session_id)
+    user_query = query_data.query
+
+    # Intercept general/greeting/capabilities questions to bypass RAG constraint
+    try:
+        intent = await classify_query_intent(user_query)
+        if intent == "GENERAL":
+            ws.messages.append({"role": "user", "content": user_query, "references": []})
+            answer_text = await generate_general_response(user_query, ws.document_ids)
+            refs = []
+            ws.messages.append({"role": "assistant", "content": answer_text, "references": refs})
+            return {"answer": answer_text, "references": refs}
+    except Exception:
+        pass
+
     if not ws.document_ids:
         raise HTTPException(
             status_code=400, 
             detail="Please upload or process learning resources before asking questions."
         )
         
-    user_query = query_data.query
     ws.messages.append({"role": "user", "content": user_query, "references": []})
     
     try:
